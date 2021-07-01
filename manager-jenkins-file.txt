@@ -1,0 +1,48 @@
+pipeline {
+    agent any
+    environment {
+        BACKSLASH='\\'
+        SLASH='/'
+        CIF='\$'
+        SYSTEM_ENV_JAVA_HTTP_PROXY='DEFAULT_JVM_OPTS="-Xmx64m -Xms64m -Dhttp.proxyHost=10.105.161.139 -Dhttp.proxyPort=3128 -Dhttps.proxyHost=10.105.161.139 -Dhttps.proxyPort=3128\"'
+        PUBLISH_SERVER='10.105.161.139'
+        PUBLISH_DIRECTORY='/opt/scp/cobranca/manager'
+        ARTIFACT_NAME='manager-1.0.0-SNAPSHOT.jar'
+        TEMP_PUBLISH_DIR="/opt/publish"
+        SERVICE_NAME="cobranca-manager"
+    }
+    stages {
+        stage('checkout') {
+            steps {
+                checkout([
+                    $class: 'GitSCM', branches: [[name: '*/master']], extensions: [[$class: 'CleanBeforeCheckout']],
+                    doGenerateSubmoduleConfigurations: false, submoduleCfg: [], userRemoteConfigs: [[credentialsId: 'Bitbucket Credentials', url: 'https://bitbucket.org/ValidSolutions/billingportal-manager.git']]
+                ])
+            }
+        }
+        stage('Build') {
+            steps {
+                sh """
+                    chmod +x gradlew
+                    sed -i '''s${SLASH}^DEFAULT_JVM_OPT.*[${BACKSLASH}x22][-]Xms64m[${BACKSLASH}x22][${BACKSLASH}x27]${CIF}${SLASH}${SYSTEM_ENV_JAVA_HTTP_PROXY}${SLASH}''' gradlew
+                    ./gradlew build -x test
+                """
+            }
+        }
+        stage('Test') {
+            steps {
+                echo 'Testing..'
+            }
+        }
+        stage('Deploy') {
+            steps {
+                sh """
+                    scp build/libs/*jar ${PUBLISH_SERVER}:${TEMP_PUBLISH_DIR}/
+                    ssh -X ${PUBLISH_SERVER} mv ${PUBLISH_DIRECTORY}/${ARTIFACT_NAME} ${PUBLISH_DIRECTORY}/${ARTIFACT_NAME}.before${BUILD_NUMBER}.old
+                    ssh -X ${PUBLISH_SERVER} cp ${TEMP_PUBLISH_DIR}/${ARTIFACT_NAME} ${PUBLISH_DIRECTORY}/${ARTIFACT_NAME}
+                    ssh -X ${PUBLISH_SERVER} systemctl restart ${SERVICE_NAME}
+                """
+            }
+        }
+    }
+}
