@@ -1,0 +1,52 @@
+def remote = [:]
+remote.name = 'scpclientgf'
+remote.host = ''
+remote.user = ''
+remote.password = ''
+remote.allowAnyHosts = true
+
+pipeline {
+    agent any
+    stages {
+        stage('checkout') {
+            steps {
+                checkout([
+                    $class: 'GitSCM', branches: [[name: '*/master']], extensions: [[$class: 'CleanBeforeCheckout']],
+                    doGenerateSubmoduleConfigurations: false, submoduleCfg: [], userRemoteConfigs: [[credentialsId: 'Bitbucket Credentials', url: 'https://bitbucket.org/ValidSolutions/scpclientfront.git']]
+                ])
+            }
+        }
+        stage('Build') {
+            steps {
+                echo 'Building...'
+                sh """
+                    rm -rf src/assets/properties.json
+                    mv src/assets/properties-prod.json src/assets/properties.json
+                """
+                sh 'npm-cache install npm -prefer-offline --no-audit'
+                sh './node_modules/.bin/ng build --prod --base-href /ScpClientTestes/ --project scp-client' 
+                sh 'grunt war'
+                archiveArtifacts artifacts: 'dist/scp.client.war', fingerprint: true
+            }
+        }
+        stage('Test') {
+            steps {
+                echo 'Testing..'
+            }
+        }
+        stage('Deploy') {
+            steps {
+                echo 'Deploing...'
+                withCredentials([usernamePassword(credentialsId: 'Glassfish_Admin', usernameVariable: 'USER', passwordVariable: 'PASS')]) {
+                    sh """echo AS_ADMIN_PASSWORD='$PASS' > tempCred.txt"""
+                }
+                sshCommand remote: remote, command: "sudo rm -rf /opt/publish/scp.client.testes.old.war"
+                sshCommand remote: remote, command: 'sudo [ ! -f /opt/publish/scp.client.testes.war ] || mv /opt/publish/scp.client.testes.war /opt/publish/scp.client.testes.old.war'
+                sshPut remote: remote, from: 'tempCred.txt', into: '.'
+                sshPut remote: remote, from: 'dist/scp.client.war', into: '/opt/publish/scp.client.testes.war'
+                sshCommand remote: remote, command: "sudo /opt/glassfish5/bin/asadmin --user admin --passwordfile tempCred.txt deploy --name ScpClientTestes --contextroot ScpClientTestes --force true /opt/publish/scp.client.testes.war"
+                sh 'rm -rf tempCred.txt'
+            }
+        }
+    }
+}
